@@ -1,0 +1,5 @@
+Flask
+arxiv
+sentence-transformers
+scikit-learn
+srsly
