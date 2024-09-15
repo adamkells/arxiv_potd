@@ -1,5 +1,6 @@
-Flask
 arxiv
-sentence-transformers
+numpy
 scikit-learn
+Flask
+sentence-transformers
 srsly
