@@ -8,7 +8,16 @@ app = Flask(__name__)
 
 recent_papers = fetch_recent_papers()
 # Load a pre-trained embedding model
-model = SentenceTransformer('all-MiniLM-L6-v2')
+
+def get_model():
+    model_name = 'paraphrase-MiniLM-L6-v2'  # Choose a smaller model if possible
+    model_dir = '/tmp/sentence_transformers'  # Use Heroku's ephemeral filesystem
+    if not os.path.exists(model_dir):
+        os.makedirs(model_dir)
+    return SentenceTransformer(model_name, cache_folder=model_dir)
+
+# Use this function to get your model
+model = get_model()
 embeddings = embed_abstracts(recent_papers, model)
 top_papers = find_top_papers("causality for time series forecasting", embeddings, recent_papers, model)
 
