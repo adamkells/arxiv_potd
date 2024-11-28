@@ -1,48 +1,132 @@
-
-from flask import Flask, request, render_template
-from paper_scraper import find_top_papers, fetch_recent_papers, embed_abstracts
 from sentence_transformers import SentenceTransformer
+import arxiv
+import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from pathlib import Path
 import srsly
+from dotenv import load_dotenv
+import os
+from typing import List, Dict, Any
 
-app = Flask(__name__)
+# Load environment variables
+load_dotenv()
 
-recent_papers = fetch_recent_papers()
-# Load a pre-trained embedding model
+# Email configuration
+SENDER_EMAIL = os.getenv('SENDER_EMAIL')
+SENDER_PASSWORD = os.getenv('SENDER_PASSWORD')
+RECIPIENT_LIST = os.getenv('RECIPIENT_LIST', '').split(',')
 
-def get_model():
-    model_name = 'paraphrase-MiniLM-L6-v2'  # Choose a smaller model if possible
-    model_dir = '/tmp/sentence_transformers'  # Use Heroku's ephemeral filesystem
-    if not os.path.exists(model_dir):
-        os.makedirs(model_dir)
-    return SentenceTransformer(model_name, cache_folder=model_dir)
+# File paths
+DATA_DIR = Path('data')
+POTD_FILE = DATA_DIR / 'potd.jsonl'
 
-# Use this function to get your model
-model = get_model()
-embeddings = embed_abstracts(recent_papers, model)
-top_papers = find_top_papers("causality for time series forecasting", embeddings, recent_papers, model)
+# Ensure data directory exists
+DATA_DIR.mkdir(exist_ok=True)
+if not POTD_FILE.exists():
+    POTD_FILE.write_text('[]')
 
-@app.route('/')
-def home():
-    return render_template('index.html', papers=top_papers[:1])
+def fetch_recent_papers(max_results: int = 100) -> List[Dict[str, Any]]:
+    """Fetch recent papers from arXiv."""
+    search = arxiv.Search(
+        query="cat:stat.ML OR cat:cs.LG",
+        max_results=max_results,
+        sort_by=arxiv.SortCriterion.SubmittedDate
+    )
+    
+    papers = []
+    for result in search.results():
+        paper = {
+            'title': result.title,
+            'abstract': result.summary,
+            'authors': [author.name for author in result.authors],
+            'url': result.pdf_url,
+            'published': result.published.strftime('%Y-%m-%d')
+        }
+        papers.append(paper)
+    
+    return papers
 
-@app.route('/search', methods=['POST'])
-def search():
-    query = request.form['query']
-    top_papers = find_top_papers(query, embeddings, recent_papers, model)
-    return render_template('results.html', papers=top_papers)
+def embed_abstracts(papers: List[Dict[str, Any]], model: SentenceTransformer) -> np.ndarray:
+    """Embed paper abstracts using the provided model."""
+    abstracts = [paper['abstract'] for paper in papers]
+    return model.encode(abstracts)
 
-old_papers = list(srsly.read_jsonl('data/potd.jsonl'))
-old_papers.append(top_papers[0])
-# TODO: Reformat to make papers json seriablizable.
-# srsly.write_jsonl('data/potd.jsonl', old_papers)
+def find_top_papers(query: str, embeddings: np.ndarray, papers: List[Dict[str, Any]], 
+                    model: SentenceTransformer, top_k: int = 5) -> List[Dict[str, Any]]:
+    """Find top papers matching the query."""
+    query_embedding = model.encode([query])
+    similarities = cosine_similarity(query_embedding, embeddings)[0]
+    top_indices = np.argsort(similarities)[-top_k:][::-1]
+    
+    return [papers[i] for i in top_indices]
 
-@app.route('/old_potd', methods=['POST'])
-def old_potd():
-    return render_template('results.html', papers=old_papers)
+def send_email(recipients: List[str], paper: Dict[str, Any]) -> None:
+    """Send email with paper information."""
+    msg = MIMEMultipart()
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = ', '.join(recipients)
+    msg['Subject'] = f"Daily arXiv Paper: {paper['title']}"
 
+    body = f"""
+    Title: {paper['title']}
+    Authors: {', '.join(paper['authors'])}
+    Published: {paper['published']}
 
-if __name__ == '__main__':
-    import os
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    Abstract:
+    {paper['abstract']}
 
+    URL: {paper['url']}
+    """
+    
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        with smtplib.SMTP('smtp.gmail.com', 587) as server:
+            server.starttls()
+            server.login(SENDER_EMAIL, SENDER_PASSWORD)
+            server.send_message(msg)
+            print("Email sent successfully")
+    except Exception as e:
+        print(f"Error sending email: {e}")
+
+def main():
+    try:
+        # Load model
+        print("Loading model...")
+        model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
+        
+        # Fetch papers
+        print("Fetching recent papers...")
+        recent_papers = fetch_recent_papers()
+        
+        # Embed abstracts
+        print("Embedding abstracts...")
+        embeddings = embed_abstracts(recent_papers, model)
+        
+        # Find top papers
+        print("Finding top papers...")
+        query = "causality for time series forecasting"
+        top_papers = find_top_papers(query, embeddings, recent_papers, model, top_k=1)
+        
+        if top_papers:
+            # Send email
+            print("Sending email...")
+            send_email(RECIPIENT_LIST, top_papers[0])
+            
+            # Save to history
+            try:
+                old_papers = list(srsly.read_jsonl(POTD_FILE))
+                old_papers.append(top_papers[0])
+                srsly.write_jsonl(POTD_FILE, old_papers)
+                print("Paper saved to history")
+            except Exception as e:
+                print(f"Error saving to history: {e}")
+                
+    except Exception as e:
+        print(f"Error in main process: {e}")
+
+if __name__ == "__main__":
+    main()
