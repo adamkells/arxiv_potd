@@ -1,41 +1,40 @@
-name: Deploy to GitHub Pages
+name: ArXiv Paper Notifications
 
 on:
-  push:
-    branches: ["main"]
-  workflow_dispatch:
+  schedule:
+    - cron: '0 8 * * *'  # Runs daily at 8 AM UTC
+  workflow_dispatch:  # Allows manual triggering
 
 jobs:
-  # Build job
-  build:
+  send-paper:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Setup Pages
-        uses: actions/configure-pages@v3
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v2
-        with:
-          path: '.'  # Upload the entire repository
-
-  deploy:
-    # Add a dependency to the build job
-    needs: build
-
-    # Grant GITHUB_TOKEN the permissions required to make a Pages deployment
     permissions:
-      pages: write      # to deploy to Pages
-      id-token: write   # to verify the deployment originates from an appropriate source
-
-    # Deploy to the github-pages environment
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-
-    # Specify runner + deployment step
-    runs-on: ubuntu-latest
+      contents: write  # Needed to write to the JSONL file
+    
     steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4 # or specific "vX.X.X" version tag for this action
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install sentence-transformers arxiv numpy scikit-learn python-dotenv srsly
+          
+      - name: Find and send paper
+        env:
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+          RECIPIENT_LIST: ${{ secrets.RECIPIENT_LIST }}
+        run: |
+          python arxiv_emailer.py
+          
+      - name: Commit and push if history changed
+        run: |
+          git config --global user.name 'GitHub Action'
+          git config --global user.email 'action@github.com'
+          git add data/potd.jsonl
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Update paper history" && git push)
