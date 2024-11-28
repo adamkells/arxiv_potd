@@ -30,7 +30,7 @@ jobs:
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           RECIPIENT_LIST: ${{ secrets.RECIPIENT_LIST }}
         run: |
-          python arxiv_emailer.py
+          python app.py
           
       - name: Commit and push if history changed
         run: |
