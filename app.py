@@ -109,7 +109,7 @@ def main():
         # Find top papers
         print("Finding top papers...")
         query = "causality for time series forecasting"
-        top_papers = find_top_papers(query, embeddings, recent_papers, model, top_k=1)
+        top_papers = find_top_papers(query, embeddings, recent_papers, model, top_k=3)
         
         if top_papers:
             # Send email
